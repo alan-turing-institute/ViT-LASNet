@@ -2,8 +2,9 @@
 """Classify plankton images with a trained ResNet, ViT or BEiT model and write a CSV.
 
 Model versions: 0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT. ResNet weights are a
-``.pth`` state dict; ViT/BEiT weights are a ``save_pretrained`` folder containing
-``config.json`` and ``model.safetensors``.
+``.pth`` or ``.safetensors`` state dict; ViT/BEiT weights are a ``save_pretrained``
+folder containing ``config.json`` and ``model.safetensors``. ``-w`` also accepts a
+Hugging Face model as ``<user>/<repo>/<sub-folder>``, e.g. ``Noushineft/ViT-LASNet/vit-mislas``.
 
 With ``--top-k 1`` (the default) the CSV has ``Filename, Predicted Class``. With
 ``--top-k 3`` it has ``Top1 Prediction, Top1 Probability, ...`` columns, which is
@@ -67,8 +68,36 @@ def get_device():
     return device
 
 
+def resolve_weights(weights):
+    """Return a local path for ``weights``.
+
+    A path that exists locally is returned unchanged. Anything else is read as a
+    Hugging Face model, ``<user>/<repo>/<sub-folder>``, for example
+    ``Noushineft/ViT-LASNet/vit-mislas``, and downloaded.
+    """
+    if os.path.exists(weights):
+        return weights
+    from huggingface_hub import snapshot_download
+    parts = weights.strip("/").split("/")
+    if len(parts) < 3:
+        raise FileNotFoundError(f"{weights!r} is not a local path or a Hugging Face '<user>/<repo>/<sub-folder>'")
+    repo_id, subfolder = "/".join(parts[:2]), "/".join(parts[2:])
+    local = snapshot_download(repo_id, allow_patterns=[f"{subfolder}/*"])
+    return os.path.join(local, subfolder)
+
+
+def load_state_dict(path):
+    if os.path.isdir(path):
+        path = os.path.join(path, "model.safetensors")
+    if path.endswith(".safetensors"):
+        from safetensors.torch import load_file
+        return load_file(path)
+    return torch.load(path, map_location="cpu", weights_only=True)
+
+
 def load_model(weights, device, model_version, num_classes, gray=False):
     """Return (model, processor). ``processor`` is None for the ResNet models."""
+    weights = resolve_weights(weights)
     if model_version == 2:
         processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
         model = ViTForImageClassification.from_pretrained(weights)
@@ -81,7 +110,7 @@ def load_model(weights, device, model_version, num_classes, gray=False):
         if gray:
             model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
         model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-        model.load_state_dict(torch.load(weights, map_location="cpu"))
+        model.load_state_dict(load_state_dict(weights))
     model = model.to(device)
     model.eval()
     return model, processor
@@ -134,7 +163,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("filename", help="TIFF file, or folder of TIFF files with -f")
     parser.add_argument("-w", "--weights", required=True,
-                        help="ResNet .pth file, or ViT/BEiT save_pretrained folder")
+                        help="ResNet .pth/.safetensors file, ViT/BEiT save_pretrained folder, "
+                             "or Hugging Face <user>/<repo>/<sub-folder>")
     parser.add_argument("-m", "--model_version", type=int, choices=[0, 1, 2, 3], default=0,
                         help="0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT (default 0)")
     parser.add_argument("-n", "--num_classes", type=int, choices=sorted(CLASS_LABELS), default=3,

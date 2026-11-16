@@ -2,7 +2,13 @@
 
 `test.py` classifies a single TIFF image, or every `.tif`/`.tiff` file in a folder (`-f`), and writes the results to a CSV file (`-o`, default `predictions.csv`). Run `python test/test.py --help` for every option.
 
-Download the model weights from the [Google Drive folder](https://drive.google.com/drive/folders/130q9PPqs-NGFzyLHuXTAVjt0g2HNlya_). [Issue #2](https://github.com/alan-turing-institute/ViT-LASNet/issues/2) discusses moving them to a repository with a model card.
+The trained weights are on [Hugging Face](https://huggingface.co/Noushineft/ViT-LASNet), with a model card. Pass `-w Noushineft/ViT-LASNet/<sub-folder>` to download them automatically, for example:
+
+```
+python test/test.py -m 2 -n 18 -w Noushineft/ViT-LASNet/vit-mislas -f path/to/images -o out.csv
+```
+
+You can also pass a local path to the weights, as in the examples below.
 
 The examples below use a small test set from the [UKCEH freshwater plankton project](https://github.com/NERC-CEH/plankton_ml/).
 

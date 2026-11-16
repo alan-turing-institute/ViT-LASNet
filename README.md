@@ -4,7 +4,7 @@ Plankton images from in situ imagers are dominated by a few common classes (detr
 
 - **Paper:** [ViT-LASNet (Springer)](https://link.springer.com/chapter/10.1007/978-3-031-92387-6_8)
 - **Project page:** <https://alan-turing-institute.github.io/ViT-LASNet/>
-- **Model weights:** [Google Drive](https://drive.google.com/drive/folders/130q9PPqs-NGFzyLHuXTAVjt0g2HNlya_)
+- **Model weights:** [Hugging Face: Noushineft/ViT-LASNet](https://huggingface.co/Noushineft/ViT-LASNet) (ViT, BEiT and ResNet18 models, with a model card)
 
 ![ViT-LASNet framework](Fig1-ECCV_lr.png)
 
@@ -75,12 +75,12 @@ python train/train_resnet.py --data-dir data/split --output-dir runs/resnet --gr
 **Predict:**
 
 ```bash
-# ViT (18 classes), top-3 predictions for every TIFF in a folder
-python test/test.py -m 2 -n 18 -k 3 -w runs/vit/vit_finetuned_MiSLAS_vit_lr5e-05_epochs30 \
+# ViT-LASNet (18 classes), downloaded from Hugging Face; top-3 predictions for every TIFF in a folder
+python test/test.py -m 2 -n 18 -k 3 -w Noushineft/ViT-LASNet/vit-mislas \
     -f path/to/images -o results/vit_topthree.csv
 ```
 
-`-m` selects the model (0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT). For ResNet weights, add `-g` if the model was trained on greyscale images. See [`test/README.md`](test/README.md) for more examples.
+`-w` takes a local weights path or a Hugging Face model as `<user>/<repo>/<sub-folder>`. The published sub-folders are `vit-mislas`, `beit-balce`, `vit-balce-3class`, `resnet18-18class-rgb` and `resnet18-3class-rgb`. `-m` selects the model (0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT). For ResNet weights, add `-g` if the model was trained on greyscale images. See [`test/README.md`](test/README.md) for more examples.
 
 **Evaluate:**
 
