@@ -36,6 +36,8 @@ def parse_args():
     p.add_argument('--num-workers', type=int, default=16)
     p.add_argument('--smoothing', type=float, default=0.1, help='label smoothing for LS_CE and BCE')
     p.add_argument('--bal-tau', type=float, default=1.0, help='logit-adjustment temperature for Bal_CE')
+    p.add_argument('--attention-mode', choices=['entropy', 'legacy'], default='entropy',
+                   help="MiSLAS_vit attention weighting; 'legacy' reproduces the published results")
     p.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     p.add_argument('--seed', type=int, default=42)
     return p.parse_args()
@@ -63,7 +65,7 @@ def main():
         print(f"{idx}: {class_name}")
 
     class_counts = [dataset.targets.count(i) for i in range(len(dataset.classes))]
-    loss_args = LossArgs(class_counts, cfg.smoothing, cfg.bal_tau, cfg.device)
+    loss_args = LossArgs(class_counts, cfg.smoothing, cfg.bal_tau, cfg.device, cfg.attention_mode)
 
     n_val = int(round(cfg.val_fraction * len(dataset)))
     train_set, val_set = random_split(dataset, [len(dataset) - n_val, n_val])

@@ -60,6 +60,8 @@ python train/train.py --data-dir data/train --output-dir runs/vit \
 
 To compare losses, pass several: `--loss ST_CE Bal_CE LDAM MiSLAS MiSLAS_vit`. Use `--model beit` for BEiT.
 
+> **Note on `MiSLAS_vit` (November 2026).** The original attention weighting indexed the token axis with the class label. This scaled smoothing down by about 1/197, so it behaved almost like plain cross-entropy. The default is now `--attention-mode entropy`: smoothing for each image is scaled by the normalised entropy of the CLS token's attention over image patches, from 0 (attention focused on one patch) to 1 (spread evenly). Use `--attention-mode legacy` to reproduce the published results and the released `vit-mislas` weights.
+
 **Nested cross-validation:**
 
 ```bash

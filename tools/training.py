@@ -24,12 +24,13 @@ PRETRAINED = {
 class LossArgs:
     """Container for the attributes the loss classes in tools/loss.py read."""
 
-    def __init__(self, cls_num, smoothing=0.1, bal_tau=1.0, device='cpu'):
+    def __init__(self, cls_num, smoothing=0.1, bal_tau=1.0, device='cpu', attention_mode='entropy'):
         self.cls_num = list(cls_num)
         self.nb_classes = len(self.cls_num)
         self.smoothing = smoothing
         self.bal_tau = bal_tau
         self.device = device
+        self.attention_mode = attention_mode
 
 
 def get_loss_function(loss_type, args):
@@ -39,7 +40,7 @@ def get_loss_function(loss_type, args):
         'BCE': lambda: BCE_loss(args),
         'LS_CE': lambda: LS_CE_loss(smoothing=args.smoothing),
         'MiSLAS': lambda: MiSLAS_loss(args),
-        'MiSLAS_vit': lambda: MiSLAS_vit_loss(args),
+        'MiSLAS_vit': lambda: MiSLAS_vit_loss(args, attention_mode=getattr(args, 'attention_mode', 'entropy')),
         'LADE': lambda: LADE_loss(args),
         'LDAM': lambda: LDAM_loss(args),
         'CB_CE': lambda: CB_CE_loss(args),

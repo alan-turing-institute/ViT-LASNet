@@ -187,12 +187,33 @@ class MiSLAS_loss(nn.Module):
 
 class MiSLAS_vit_loss(nn.Module):
     '''
+        Label-aware smoothing (MiSLAS) with a per-image adjustment from ViT attention.
+
+        Each class c gets a base smoothing factor s_c from its frequency (up to 0.3 for
+        head classes, 0 for the rarest). With attention, image i uses s_c * w_i, where
+        w_i in [0, 1] is the normalised entropy of the CLS token's attention over the
+        image patches in the last layer (heads averaged):
+
+            w_i = 1  attention spread evenly over the image -> full smoothing
+            w_i -> 0 attention focused on a few patches     -> less smoothing
+
+        so the model is allowed to be more confident when it attends to a clear object.
+        Attention is detached: the smoothing target does not back-propagate into the
+        attention maps, so the model cannot lower its loss by reshaping attention.
+
+        attention_mode='legacy' reproduces the original 2024 implementation used
+        for the published results. It indexed the token axis with the class label and
+        so scaled smoothing by roughly 1/num_tokens (about 0.005 for ViT-B/16).
+
         Paper: Improving Calibration for Long-Tailed Recognition
         Code: https://github.com/Jia-Research-Lab/MiSLAS
     '''
-    def __init__(self, args, shape='concave', power=None, use_attention=True):
+    def __init__(self, args, shape='concave', power=None, use_attention=True, attention_mode='entropy'):
         super(MiSLAS_vit_loss, self).__init__()
+        if attention_mode not in ('entropy', 'legacy'):
+            raise ValueError("attention_mode must be 'entropy' or 'legacy'")
         self.use_attention = use_attention
+        self.attention_mode = attention_mode
         cls_num_list = args.cls_num
         n_1 = max(cls_num_list)
         n_K = min(cls_num_list)
@@ -211,18 +232,22 @@ class MiSLAS_vit_loss(nn.Module):
         self.smooth = torch.from_numpy(self.smooth)
         self.smooth = self.smooth.float()
 
+    def attention_weight(self, attention_scores, target):
+        """Per-image smoothing multiplier, shape [batch_size]."""
+        last = attention_scores[-1]  # [batch_size, heads, tokens, tokens]
+        if self.attention_mode == 'legacy':
+            # Original behaviour, kept only to reproduce published results.
+            scores = last.mean(dim=1).mean(dim=1)  # [batch_size, tokens]
+            return scores.gather(dim=-1, index=target.unsqueeze(1)).squeeze(1)
+        cls_to_patches = last.detach()[:, :, 0, 1:].mean(dim=1)  # [batch_size, patches]
+        p = cls_to_patches / cls_to_patches.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        entropy = -(p * p.clamp_min(1e-12).log()).sum(dim=-1)
+        return entropy / np.log(p.size(-1))
+
     def forward_oneway(self, x, target, attention_scores=None):
-        smooth = self.smooth.to(x.device)
+        smoothing = self.smooth.to(x.device)[target]  # [batch_size]
         if self.use_attention and attention_scores is not None:
-            # Use the attention scores from the last layer and average over heads and tokens
-            attention_scores = attention_scores[-1].mean(dim=1)  # Average over heads: [batch_size, num_tokens, num_tokens]
-            attention_scores = attention_scores.mean(dim=1)      # Average over tokens: [batch_size, num_tokens]
-            attention_weights = attention_scores.gather(dim=-1, index=target.unsqueeze(1))
-            attention_weights = attention_weights.squeeze(1)  # [batch_size]
-            # Broadcast smooth to match batch size
-            smooth = smooth.expand(attention_weights.size(0), -1)  # [batch_size, num_classes]
-            smooth = smooth * attention_weights.unsqueeze(1)       # [batch_size, num_classes]
-        smoothing = smooth.gather(dim=1, index=target.unsqueeze(1)).squeeze(1)
+            smoothing = smoothing * self.attention_weight(attention_scores, target)
         confidence = 1. - smoothing
         logprobs = F.log_softmax(x, dim=-1)
         nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
