@@ -1,32 +1,34 @@
+# Running inference
 
-## Notes on reproducing
+`test.py` classifies a single TIFF image, or every `.tif`/`.tiff` file in a folder (`-f`), and writes the results to a CSV file (`-o`, default `predictions.csv`). Run `python test/test.py --help` for every option.
 
-With the model weights downloaded from Google Drive (see [this issue](https://github.com/alan-turing-institute/ViT-LASNet/issues/2) for a query about where they could be held in a repository with model card to support reuse).
+Download the model weights from the [Google Drive folder](https://drive.google.com/drive/folders/130q9PPqs-NGFzyLHuXTAVjt0g2HNlya_). [Issue #2](https://github.com/alan-turing-institute/ViT-LASNet/issues/2) discusses moving them to a repository with a model card.
 
-Images are a small test set from [this project on freshwater plankton](https://github.com/NERC-CEH/plankton_ml/).
+The examples below use a small test set from the [UKCEH freshwater plankton project](https://github.com/NERC-CEH/plankton_ml/).
 
-### ViT model (version = 2, num_classes = 18)
+### ViT, 18 classes
 
-Note this is the version in the subdirectory with `model.safetensors` included, not the single-file `.pt` version.
-
-```
-python test.py -w ~/vit_finetuned_MiSLAS_vit_lr5e-05_epochs30/ -o out -n 18 -m 2 -f ../../plankton_ml/tests/fixtures/test_images/
-```
-
-### 3 class ResNet18 
-
-With the 3-class Resnet18 weights and the model_version 1 ("combined) we see output:
-```
-python test.py -w ../ResNet_18_3classes_RGB.pth -o out.csv -m 1 -f ../../plankton_ml/tests/fixtures/test_images/
-```
-
-### 18 class ResNet18 
-
-As above but with an `-n` option to specify the model classes (used both to initialise and for predictions). 
-Defaults to 3, will raise an error with values other than 18
+Use the `save_pretrained` folder (the one containing `model.safetensors`), not the single-file `.pt` checkpoint.
 
 ```
-python test.py -w ../ResNet_18_18classes_RGB.pth -o out.csv -m 1 -n 18 -f ../../plankton_ml/tests/fixtures/test_images/
+python test/test.py -m 2 -n 18 -w ~/vit_finetuned_MiSLAS_vit_lr5e-05_epochs30/ -o out.csv \
+    -f ../plankton_ml/tests/fixtures/test_images/
 ```
 
+Add `-k 3` to write the top three predictions and their probabilities. `tools/evaluate.py` reads that format.
 
+### ResNet18, 3 classes
+
+```
+python test/test.py -m 1 -w ResNet_18_3classes_RGB.pth -o out.csv -f ../plankton_ml/tests/fixtures/test_images/
+```
+
+### ResNet18, 18 classes
+
+`-n` sets the number of classes. It is used both to build the model and to name the predictions. Only 3 and 18 are supported.
+
+```
+python test/test.py -m 1 -n 18 -w ResNet_18_18classes_RGB.pth -o out.csv -f ../plankton_ml/tests/fixtures/test_images/
+```
+
+For a ResNet trained on greyscale images, add `-g`.

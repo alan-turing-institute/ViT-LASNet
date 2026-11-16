@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Model weights and run outputs (share weights via the link in README.md)
+*.pth
+*.pt
+*.safetensors
+runs/
+results/
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
