@@ -1,238 +1,171 @@
 #!/usr/bin/env python3
+"""Classify plankton images with a trained ResNet, ViT or BEiT model and write a CSV.
 
-import pandas as pd
-from PIL import Image
-from torchvision.transforms import functional
+Model versions: 0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT. ResNet weights are a
+``.pth`` state dict; ViT/BEiT weights are a ``save_pretrained`` folder containing
+``config.json`` and ``model.safetensors``.
+
+With ``--top-k 1`` (the default) the CSV has ``Filename, Predicted Class``. With
+``--top-k 3`` it has ``Top1 Prediction, Top1 Probability, ...`` columns, which is
+the format ``tools/evaluate.py`` reads.
+
+Examples::
+
+    python test/test.py -m 2 -n 18 -w weights/vit_finetuned_MiSLAS_vit_lr5e-05_epochs30 \\
+        -f images/ -o predictions.csv
+    python test/test.py -m 1 -w weights/ResNet_18_3classes_RGB.pth -f images/ -o predictions.csv
+"""
 import argparse
+import csv
 import logging
+import os
+from io import BytesIO
+
+import tifffile as tiff
 import torch
 import torchvision
-import tifffile as tiff
-from io import BytesIO
-import numpy as np
-import os
-import csv
+from PIL import Image
+from torchvision.transforms import functional
+from transformers import (AutoImageProcessor, BeitForImageClassification, BeitImageProcessor,
+                          ViTForImageClassification)
+
 logging.basicConfig(level=logging.INFO)
-from transformers import AutoImageProcessor, ViTForImageClassification, BeitImageProcessor, BeitForImageClassification
 
-device = "mps" if torch.backends.mps.is_available() else "cpu"
-logging.info(f"Using device: {device}")
-
-CLASS_LABELS = { 3 : [
-    "copepod",
-    "detritus",
-    "noncopepod",
-],
-    18 : [
-    "Detritus",
-    "Phyto_diatom",
-    "Phyto_diatom_chaetocerotanae_Chaetoceros",
-    "Phyto_diatom_rhisoleniales_Guinardia flaccida",
-    "Phyto_diatom_rhisoleniales_Rhizosolenia",
-    "Phyto_dinoflagellate_gonyaulacales_Tripos",
-    "Phyto_dinoflagellate_gonyaulacales_Tripos macroceros",
-    "Phyto_dinoflagellate_gonyaulacales_Tripos muelleri",
-    "Zoo_cnidaria",
-    "Zoo_crustacea_copepod",
-    "Zoo_crustacea_copepod_calanoida",
-    "Zoo_crustacea_copepod_calanoida_Acartia",
-    "Zoo_crustacea_copepod_calanoida_Centropages",
-    "Zoo_crustacea_copepod_cyclopoida",
-    "Zoo_crustacea_copepod_cyclopoida_Oithona",
-    "Zoo_crustacea_copepod_nauplii",
-    "Zoo_other",
-    "Zoo_tintinnidae"
-]
+CLASS_LABELS = {
+    3: ["copepod", "detritus", "noncopepod"],
+    18: [
+        "Detritus",
+        "Phyto_diatom",
+        "Phyto_diatom_chaetocerotanae_Chaetoceros",
+        "Phyto_diatom_rhisoleniales_Guinardia flaccida",
+        "Phyto_diatom_rhisoleniales_Rhizosolenia",
+        "Phyto_dinoflagellate_gonyaulacales_Tripos",
+        "Phyto_dinoflagellate_gonyaulacales_Tripos macroceros",
+        "Phyto_dinoflagellate_gonyaulacales_Tripos muelleri",
+        "Zoo_cnidaria",
+        "Zoo_crustacea_copepod",
+        "Zoo_crustacea_copepod_calanoida",
+        "Zoo_crustacea_copepod_calanoida_Acartia",
+        "Zoo_crustacea_copepod_calanoida_Centropages",
+        "Zoo_crustacea_copepod_cyclopoida",
+        "Zoo_crustacea_copepod_cyclopoida_Oithona",
+        "Zoo_crustacea_copepod_nauplii",
+        "Zoo_other",
+        "Zoo_tintinnidae",
+    ],
 }
 
-def resnet50(num_classes):
-    model = torchvision.models.resnet50()
-    model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    model.eval()
-    return model
-
-def resnet18(num_classes):
-    model = torchvision.models.resnet18()
-    model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    model.eval()
-    return model
-
-def resnet18_gray(num_classes):
-    model = torchvision.models.resnet18()
-    model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-    return model
-
-def vit_model(model_path, device):
-    processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    model = ViTForImageClassification.from_pretrained(model_path).to(device)
-    model.eval()
-    return model, processor
-
-def beit_model(model_path, device):
-    processor = BeitImageProcessor.from_pretrained("microsoft/beit-base-patch16-224-pt22k-ft22k")
-    model = BeitForImageClassification.from_pretrained(model_path).to(device)
-    model.eval()
-    return model, processor
 
 def get_device():
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
     if torch.cuda.is_available():
         device = torch.device("cuda")
-    logging.info(f"Device : {device}")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    logging.info(f"Using device: {device}")
     return device
 
-def load_model(filename, device, model_version=0, gray=False):
-    if model_version == 3:
-        return beit_model(filename, device)
-    elif model_version == 2:
-        return vit_model(filename, device)
+
+def load_model(weights, device, model_version, num_classes, gray=False):
+    """Return (model, processor). ``processor`` is None for the ResNet models."""
+    if model_version == 2:
+        processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
+        model = ViTForImageClassification.from_pretrained(weights)
+    elif model_version == 3:
+        processor = BeitImageProcessor.from_pretrained("microsoft/beit-base-patch16-224-pt22k-ft22k")
+        model = BeitForImageClassification.from_pretrained(weights)
     else:
+        processor = None
+        model = torchvision.models.resnet50() if model_version == 0 else torchvision.models.resnet18()
         if gray:
-            model = resnet18_gray(num_classes=len(LABELS))
+            model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        model.load_state_dict(torch.load(weights, map_location="cpu"))
+    model = model.to(device)
+    model.eval()
+    return model, processor
+
+
+def resnet_tensor(image_bytes, gray):
+    t = functional.to_tensor(tiff.imread(BytesIO(image_bytes)))
+    t = functional.resize(t, (256, 256))
+    if gray:
+        t = (0.2125 * t[0] + 0.7154 * t[1] + 0.0721 * t[2]).unsqueeze(0)
+    return t
+
+
+def classify_batch(image_bytes_list, device, model, labels, processor=None, gray=False, top_k=1):
+    """Return, for each image, a list of ``top_k`` (label, probability) pairs."""
+    with torch.no_grad():
+        if processor is not None:
+            images = [Image.open(BytesIO(b)) for b in image_bytes_list]
+            inputs = processor(images=images, return_tensors="pt").to(device)
+            logits = model(**inputs).logits
         else:
-            if model_version == 0:
-                model = resnet50(num_classes=len(LABELS))
-            elif model_version == 1:
-                model = resnet18(num_classes=len(LABELS))
-        model_state_dict = torch.load(filename, map_location="cpu")
-        model.load_state_dict(model_state_dict)
-        model = model.to(device)
-        model.eval()
-        return model, None
+            batch = torch.stack([resnet_tensor(b, gray) for b in image_bytes_list]).to(device)
+            logits = model(batch)
+        probs, preds = torch.topk(torch.softmax(logits, dim=1), top_k)
+    return [[(labels[p], pr.item()) for p, pr in zip(row_p, row_pr)] for row_p, row_pr in zip(preds, probs)]
 
-def classify(image, device, model, processor=None, gray=False):
 
-    if processor:
-        image = Image.open(BytesIO(image))
-        inputs = processor(images=image, return_tensors="pt").to(device)
-        with torch.no_grad():
-            outputs = model(**inputs)
-            _, preds = torch.max(outputs.logits, 1)
+def write_csv(path, filenames, results, top_k):
+    if top_k == 1:
+        fieldnames = ["Filename", "Predicted Class"]
+        rows = [{"Filename": f, "Predicted Class": r[0][0]} for f, r in zip(filenames, results)]
     else:
-        image = tiff.imread(BytesIO(image))
-        t = functional.to_tensor(image)
-        t = functional.resize(t, (256, 256))
-        t = t.unsqueeze(dim=0)
-        if gray:
-            t = 0.2125 * t[0, 0, :, :] + 0.7154 * t[0, 1, :, :] + 0.0721 * t[0, 2, :, :]
-            t = torch.tile(t, (1, 1, 1, 1))
-        t = t.to(device)
-        with torch.set_grad_enabled(False):
-            outputs = model(t)
-            _, preds = torch.max(outputs, 1)
-    return LABELS[preds[0]]
-
-def classify_batch(image_list, device, model, processor=None, gray=False, batch_size=1):
-
-    if processor:
-        images = [Image.open(BytesIO(image)) for image in image_list]
-        inputs = processor(images=images, return_tensors="pt", padding=True).to(device)
-        with torch.no_grad():
-            outputs = model(**inputs)
-            _, preds = torch.max(outputs.logits, 1)
-        labels = [LABELS[i] for i in preds]
-    else:
-        images = [tiff.imread(BytesIO(image)) for image in image_list]
-        t_list = [functional.to_tensor(image) for image in images]
-        t_resize = [functional.resize(t, (256, 256)) for t in t_list]
-        if gray:
-            t_resize = [
-                0.2125 * t[0, :, :] + 0.7154 * t[1, :, :] + 0.0721 * t[2, :, :]
-                for t in t_resize
-            ]
-            t_resize = [torch.tile(t, (1, 1, 1, 1)) for t in t_resize]
-            t_resize = [t.squeeze(dim=0) for t in t_resize]
-        t_batch = np.stack(t_resize, axis=0)
-        t_batch = torch.from_numpy(t_batch)
-        t_batch = t_batch.to(device)
-        with torch.set_grad_enabled(False):
-            outputs = model(t_batch)
-            _, preds = torch.max(outputs, 1)
-        labels = [LABELS[i] for i in preds]
-    return labels
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plankton classifier")
-    parser.add_argument("-g", "--gray", action="store_true", help="load lighter weight(Resnet 18) with gray scale")
-    parser.add_argument("-m", "--model_version", type=int, default=0, help="model version zero means Resnet50, and 1 means Resnet18, 2 means ViT, 3 means BEiT, default=0")
-    parser.add_argument("filename", type=str, help="Path to the tiff file or folder you want to classify")
-    parser.add_argument("-f", "--folder", action="store_true", help="folder processing")
-    parser.add_argument("-b", "--batch_size", type=int, default=1, help="Batch size for processing images")
-    parser.add_argument("-o", "--output_csv", type=str, help="CSV file to save output in")
-    parser.add_argument("-w", "--weights", type=str, help="Optional path to model weights")
-    parser.add_argument("-n", "--num_classes", type=int, default="3", help="Optional number of class labels (default 3)")
+        fieldnames = ["Filename"]
+        for k in range(1, top_k + 1):
+            fieldnames += [f"Top{k} Prediction", f"Top{k} Probability"]
+        rows = []
+        for f, r in zip(filenames, results):
+            row = {"Filename": f}
+            for k, (label, prob) in enumerate(r, start=1):
+                row[f"Top{k} Prediction"], row[f"Top{k} Probability"] = label, prob
+            rows.append(row)
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    logging.info(f"Results saved to {path}")
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("filename", help="TIFF file, or folder of TIFF files with -f")
+    parser.add_argument("-w", "--weights", required=True,
+                        help="ResNet .pth file, or ViT/BEiT save_pretrained folder")
+    parser.add_argument("-m", "--model_version", type=int, choices=[0, 1, 2, 3], default=0,
+                        help="0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT (default 0)")
+    parser.add_argument("-n", "--num_classes", type=int, choices=sorted(CLASS_LABELS), default=3,
+                        help="number of class labels (default 3)")
+    parser.add_argument("-g", "--gray", action="store_true", help="ResNet weights were trained on greyscale input")
+    parser.add_argument("-f", "--folder", action="store_true", help="classify every .tif/.tiff file in a folder")
+    parser.add_argument("-b", "--batch_size", type=int, default=1, help="images per forward pass")
+    parser.add_argument("-k", "--top_k", type=int, default=1, help="number of predictions per image")
+    parser.add_argument("-o", "--output_csv", default="predictions.csv", help="output CSV path")
     args = parser.parse_args()
+
+    labels = CLASS_LABELS[args.num_classes]
     device = get_device()
-
-    num_classes = args.num_classes
-    try:
-        LABELS = CLASS_LABELS[num_classes]
-    except IndexError:
-        raise(f"Can't find a set of {num_classes} labels")
-
-    weights = args.weights
-    if args.model_version == 2:
-        if not weights:
-            weights = "/Users/neftekhari/Library/CloudStorage/OneDrive-TheAlanTuringInstitute/model-history-on-corrected-dataset/ViT/model_weight/vit_finetuned_MiSLAS_vit_lr5e-05_epochs20"
-        model, processor = load_model(weights, device, model_version=args.model_version)
-
-    elif args.model_version == 3:
-        if not weights:
-            weights = "/Users/neftekhari/Library/CloudStorage/OneDrive-TheAlanTuringInstitute/model-history-on-corrected-dataset/Beit/model_weight/beit_finetuned_MiSLAS_lr5e-05_epochs30"
-        model, processor = load_model(weights, device, model_version=args.model_version)
-         
-    else:
-        if args.gray:
-            model, processor = load_model("saved_models/resnet18_model_gray_weights_15May.pth", device, gray=True)
-        else:
-            if args.model_version == 0:
-                if not weights:
-                    weights = "model.pth"
-                model, processor = load_model(weights, device)
-            elif args.model_version == 1:
-                if not weights:
-                    weights =  "saved_models/combined_model.pth"
-                model, processor = load_model(weights, device, args.model_version)
+    model, processor = load_model(args.weights, device, args.model_version, len(labels), args.gray)
 
     if args.folder:
-        image_list = []
-        filenames_list = []
-        for filename in os.listdir(args.filename):
-            if 'tif' in filename:
-                filenames_list.append(filename)
-                image_path = os.path.join(args.filename, filename)
-                with open(image_path, "rb") as file:
-                    image = file.read()
-                    image_list.append(image)
-        results = []
-        for i in range(0, len(image_list), args.batch_size):
-            batch_images = image_list[i:i + args.batch_size]
-            batch_results = classify_batch(batch_images, device, model, processor, args.gray, args.batch_size)
-            results.extend(batch_results)
-
-        output_csv_file = args.output_csv
-        if not output_csv_file:
-            output_csv_file = "/Users/neftekhari/Library/CloudStorage/OneDrive-TheAlanTuringInstitute/model-history-on-corrected-dataset/ViT/output/vit-MiSLAS-vit-5e-05-30.csv"
-
-        with open(output_csv_file, "w", newline="") as csvfile:
-            fieldnames = ["Filename", "Predicted Class"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for i in range(len(filenames_list)):
-                writer.writerow({"Filename": filenames_list[i], "Predicted Class": results[i]})
-        logging.info(f"Results saved to {output_csv_file}")
-
+        filenames = sorted(f for f in os.listdir(args.filename) if f.lower().endswith((".tif", ".tiff")))
+        paths = [os.path.join(args.filename, f) for f in filenames]
     else:
-        with open(args.filename, "rb") as file:
-            image = file.read()
-            result = classify(image, device, model, processor, args.gray)
-            output_csv_file = "classification_result.csv"
-            with open(output_csv_file, "w", newline="") as csvfile:
-                fieldnames = ["Filename", "Predicted Class"]
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerow({"Filename": args.filename, "Predicted Class": result})
-            logging.info(f"Result saved to {output_csv_file}")
+        filenames, paths = [args.filename], [args.filename]
+
+    results = []
+    for i in range(0, len(paths), args.batch_size):
+        batch = []
+        for path in paths[i:i + args.batch_size]:
+            with open(path, "rb") as fh:
+                batch.append(fh.read())
+        results += classify_batch(batch, device, model, labels, processor, args.gray, args.top_k)
+
+    write_csv(args.output_csv, filenames, results, args.top_k)
+
+
+if __name__ == "__main__":
+    main()

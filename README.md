@@ -1,49 +1,99 @@
 # ViT-LASNet: Improving in situ real-time classification of long-tail marine plankton images for ecosystem studies
 
-The escalating complexity of image classification tasks in ecological monitoring has highlighted the limitations of conventional models, especially when facing long-tailed data distributions typical of natural environments.
+Plankton images from in situ imagers are dominated by a few common classes (detritus, copepods), while many ecologically important classes are rare. ViT-LASNet fine-tunes pretrained Vision Transformers (ViT, BEiT) on images from the Plankton Imager (Pi-10) and handles this long tail with **dynamic Label-Aware Smoothing (LAS)**. The smoothing factor for each class depends on its frequency, and is further scaled by the ViT's attention scores, so the model's confidence follows the image regions it attends to.
 
+- **Paper:** [ViT-LASNet (Springer)](https://link.springer.com/chapter/10.1007/978-3-031-92387-6_8)
+- **Project page:** <https://alan-turing-institute.github.io/ViT-LASNet/>
+- **Model weights:** [Google Drive](https://drive.google.com/drive/folders/130q9PPqs-NGFzyLHuXTAVjt0g2HNlya_)
 
-## Overview
+![ViT-LASNet framework](Fig1-ECCV_lr.png)
 
-This repository presents **ViT-LASNet**, a comprehensive framework designed to improve the classification of plankton images from the Plankton Imaging (Pi-10) dataset, specifically in real-time applications. The model integrates cutting-edge image classification architectures, including Vision Transformers (ViT) and BEiT, along with an innovative dynamic Label-Aware Smoothing (LAS) strategy.
+## Repository layout
 
-Link to the paper: [ViT-LASNet](https://link.springer.com/chapter/10.1007/978-3-031-92387-6_8)
-Link to the weights: [Model weights](https://drive.google.com/drive/folders/130q9PPqs-NGFzyLHuXTAVjt0g2HNlya_)
+| Path | What it does |
+| --- | --- |
+| `tools/loss.py` | Long-tail losses: cross-entropy variants, logit adjustment (`Bal_CE`), `BCE`, `LDAM`, `LADE`, class-balanced CE, MiSLAS label-aware smoothing and the attention-aware `MiSLAS_vit` used by ViT-LASNet |
+| `tools/training.py` | Shared ViT/BEiT fine-tuning loop |
+| `train/train.py` | Fine-tune ViT or BEiT over a grid of losses, learning rates and epochs |
+| `train/train_nested_cv.py` | Nested cross-validation for loss and hyperparameter selection |
+| `train/train_resnet.py` | ResNet18 baselines (RGB or greyscale, optional class-weighted loss) |
+| `test/test.py` | Classify TIFF images with a trained ResNet, ViT or BEiT and write predictions to CSV |
+| `tools/evaluate.py` | Classification reports, confusion matrices and top-3 accuracy from prediction CSVs |
+| `tools/plot_radar_chart.py` | Radar charts that compare precision, recall and F1 across models |
+| `EDA/eda.py` | Class distribution and t-SNE overview of a dataset |
+| `xAI/grad_cam_resnet.py` | Grad-CAM explanations for ResNet18 models |
 
-## Key Features
+## Installation
 
-- **Dataset:** Utilizes a novel plankton dataset (Pi-10) for ecological monitoring.
-- **Model Architecture:** Implements pre-trained Vision Transformers (ViT) and BEiT models for superior feature extraction.
-- **Dynamic Label-Aware Smoothing:** Adjusts smoothing factors based on attention scores to handle long-tailed distributions and improve classification accuracy.
-- **Real-Time Application:** Tailored for real-time performance in ecological imaging.
-
-## Motivation
-
-The Pi-10 dataset presents challenges common in ecological datasets, such as imbalanced class distributions. Conventional models struggle under these conditions, motivating the need for approaches like Label-Aware Smoothing, which better handles rare classes.
-
-## Methodology
-
-1. **Data Preprocessing:** Includes standard image augmentation and dataset splitting.
-2. **Model Training:** Employs dynamic LAS to adjust model confidence dynamically during training.
-3. **Performance Evaluation:** Evaluates the model with and without the Label-Aware Smoothing strategy, demonstrating significant improvements when using this approach.
-
-
-## Results
-
-The approach showcases marked performance improvements, particularly in handling long-tailed data distributions, setting a new benchmark for ecological image classification.
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.9.18
-- PyTorch
-- Required Python libraries (`requirements.txt`)
-
-### Installation
-
-Clone the repository:
+Requires Python 3.9 or newer.
 
 ```bash
-git clone https://github.com/noushineftekhari/ViT-LASNet.git
+git clone https://github.com/alan-turing-institute/ViT-LASNet.git
 cd ViT-LASNet
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Data
+
+Training scripts expect the torchvision `ImageFolder` layout, with one folder per class:
+
+```
+data/train/
+├── Detritus/
+├── Zoo_crustacea_copepod/
+└── ...
+```
+
+`train/train_resnet.py` expects `data/split/train/` and `data/split/test/`, each with that layout. The Pi-10 dataset is not distributed with this repository.
+
+## Usage
+
+Run all commands from the repository root. Every script has `--help`.
+
+**Fine-tune ViT with dynamic label-aware smoothing (the ViT-LASNet setting):**
+
+```bash
+python train/train.py --data-dir data/train --output-dir runs/vit \
+    --model vit --loss MiSLAS_vit --lr 5e-5 --epochs 30
+```
+
+To compare losses, pass several: `--loss ST_CE Bal_CE LDAM MiSLAS MiSLAS_vit`. Use `--model beit` for BEiT.
+
+**Nested cross-validation:**
+
+```bash
+python train/train_nested_cv.py --data-dir data/train --output-dir runs/cv --epochs 30
+```
+
+**ResNet18 baseline:**
+
+```bash
+python train/train_resnet.py --data-dir data/split --output-dir runs/resnet --gray --weighted-loss
+```
+
+**Predict:**
+
+```bash
+# ViT (18 classes), top-3 predictions for every TIFF in a folder
+python test/test.py -m 2 -n 18 -k 3 -w runs/vit/vit_finetuned_MiSLAS_vit_lr5e-05_epochs30 \
+    -f path/to/images -o results/vit_topthree.csv
+```
+
+`-m` selects the model (0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT). For ResNet weights, add `-g` if the model was trained on greyscale images. See [`test/README.md`](test/README.md) for more examples.
+
+**Evaluate:**
+
+```bash
+python tools/evaluate.py --predictions-dir results --labels-csv labels.csv --output-dir results/eval
+```
+
+`labels.csv` needs `Filename` and `Label` columns.
+
+## Acknowledgements
+
+Developed at The Alan Turing Institute. Thanks to Jo Walsh (UKCEH) for reproducibility fixes.
+
+## Citation
+
+If you use this code, please cite the paper linked above.

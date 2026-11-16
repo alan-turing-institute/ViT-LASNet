@@ -2,8 +2,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.loss import SoftTargetCrossEntropy
-from typing import Optional
 
 
 class ST_CE_loss(nn.Module):
