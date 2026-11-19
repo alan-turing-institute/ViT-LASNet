@@ -39,7 +39,7 @@ def parse_args():
     p.add_argument('--epochs', type=int, default=30)
     p.add_argument('--lr', type=float, default=0.01)
     p.add_argument('--batch-size', type=int, default=64)
-    p.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    p.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     p.add_argument('--seed', type=int, default=42)
     return p.parse_args()
 

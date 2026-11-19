@@ -33,12 +33,12 @@ def parse_args():
     p.add_argument('--epochs', nargs='+', type=int, default=[30])
     p.add_argument('--val-fraction', type=float, default=0.1)
     p.add_argument('--batch-size', type=int, default=32)
-    p.add_argument('--num-workers', type=int, default=16)
+    p.add_argument('--num-workers', type=int, default=min(16, os.cpu_count() or 1))
     p.add_argument('--smoothing', type=float, default=0.1, help='label smoothing for LS_CE and BCE')
     p.add_argument('--bal-tau', type=float, default=1.0, help='logit-adjustment temperature for Bal_CE')
     p.add_argument('--attention-mode', choices=['entropy', 'legacy'], default='entropy',
                    help="MiSLAS_vit attention weighting; 'legacy' reproduces the published results")
-    p.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    p.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     p.add_argument('--seed', type=int, default=42)
     return p.parse_args()
 

@@ -124,13 +124,32 @@ def resnet_tensor(image_bytes, gray):
     return t
 
 
-def classify_batch(image_bytes_list, device, model, labels, processor=None, gray=False, top_k=1):
-    """Return, for each image, a list of ``top_k`` (label, probability) pairs."""
+# Matches the deterministic part of the training transform in train/train.py.
+VIT_EVAL_TRANSFORM = torchvision.transforms.Compose([
+    torchvision.transforms.Resize(256),
+    torchvision.transforms.CenterCrop(224),
+    torchvision.transforms.ToTensor(),
+    torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+
+def classify_batch(image_bytes_list, device, model, labels, processor=None, gray=False, top_k=1,
+                   preprocess="train"):
+    """Return, for each image, a list of ``top_k`` (label, probability) pairs.
+
+    For ViT/BEiT, ``preprocess="train"`` uses the same resize, crop and ImageNet
+    normalisation as training. ``"processor"`` uses the Hugging Face image processor
+    (resize to 224, mean/std 0.5), which is how results were produced before
+    November 2026.
+    """
     with torch.no_grad():
         if processor is not None:
-            images = [Image.open(BytesIO(b)) for b in image_bytes_list]
-            inputs = processor(images=images, return_tensors="pt").to(device)
-            logits = model(**inputs).logits
+            images = [Image.open(BytesIO(b)).convert("RGB") for b in image_bytes_list]
+            if preprocess == "train":
+                pixel_values = torch.stack([VIT_EVAL_TRANSFORM(im) for im in images]).to(device)
+            else:
+                pixel_values = processor(images=images, return_tensors="pt")["pixel_values"].to(device)
+            logits = model(pixel_values=pixel_values).logits
         else:
             batch = torch.stack([resnet_tensor(b, gray) for b in image_bytes_list]).to(device)
             logits = model(batch)
@@ -152,6 +171,8 @@ def write_csv(path, filenames, results, top_k):
             for k, (label, prob) in enumerate(r, start=1):
                 row[f"Top{k} Prediction"], row[f"Top{k} Probability"] = label, prob
             rows.append(row)
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -173,6 +194,9 @@ def main():
     parser.add_argument("-f", "--folder", action="store_true", help="classify every .tif/.tiff file in a folder")
     parser.add_argument("-b", "--batch_size", type=int, default=1, help="images per forward pass")
     parser.add_argument("-k", "--top_k", type=int, default=1, help="number of predictions per image")
+    parser.add_argument("--preprocess", choices=["train", "processor"], default="train",
+                        help="ViT/BEiT input preprocessing: 'train' matches training (default); "
+                             "'processor' reproduces results produced before November 2026")
     parser.add_argument("-o", "--output_csv", default="predictions.csv", help="output CSV path")
     args = parser.parse_args()
 
@@ -192,7 +216,7 @@ def main():
         for path in paths[i:i + args.batch_size]:
             with open(path, "rb") as fh:
                 batch.append(fh.read())
-        results += classify_batch(batch, device, model, labels, processor, args.gray, args.top_k)
+        results += classify_batch(batch, device, model, labels, processor, args.gray, args.top_k, args.preprocess)
 
     write_csv(args.output_csv, filenames, results, args.top_k)
 
