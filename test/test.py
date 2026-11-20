@@ -27,7 +27,7 @@ import torch
 import torchvision
 from PIL import Image
 from torchvision.transforms import functional
-from transformers import (AutoImageProcessor, BeitForImageClassification, BeitImageProcessor,
+from transformers import (AutoImageProcessor, BeitForImageClassification,
                           ViTForImageClassification)
 
 logging.basicConfig(level=logging.INFO)
@@ -96,13 +96,17 @@ def load_state_dict(path):
 
 
 def load_model(weights, device, model_version, num_classes, gray=False):
-    """Return (model, processor). ``processor`` is None for the ResNet models."""
+    """Return (model, processor). ``processor`` is None for the ResNet models.
+
+    The processors use the PIL backend, which resizes images the same way as the
+    transformers 4.x processors used for the published results.
+    """
     weights = resolve_weights(weights)
     if model_version == 2:
-        processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
+        processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224", backend="pil")
         model = ViTForImageClassification.from_pretrained(weights)
     elif model_version == 3:
-        processor = BeitImageProcessor.from_pretrained("microsoft/beit-base-patch16-224-pt22k-ft22k")
+        processor = AutoImageProcessor.from_pretrained("microsoft/beit-base-patch16-224-pt22k-ft22k", backend="pil")
         model = BeitForImageClassification.from_pretrained(weights)
     else:
         processor = None
