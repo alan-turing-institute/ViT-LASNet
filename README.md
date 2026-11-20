@@ -82,7 +82,7 @@ python test/test.py -m 2 -n 18 -k 3 -w Noushineft/ViT-LASNet/vit-mislas \
     -f path/to/images -o results/vit_topthree.csv
 ```
 
-`-w` takes a local weights path or a Hugging Face model as `<user>/<repo>/<sub-folder>`. The published sub-folders are `vit-mislas`, `beit-balce`, `vit-balce-3class`, `resnet18-18class-rgb` and `resnet18-3class-rgb`. `-m` selects the model (0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT). For ResNet weights, add `-g` if the model was trained on greyscale images. See [`test/README.md`](test/README.md) for more examples.
+`-w` takes a local weights path or a Hugging Face model as `<user>/<repo>/<sub-folder>`. The published sub-folders are `vit-mislas`, `vit-mislas-entropy` (retrained in November 2026 with the corrected attention weighting), `beit-balce`, `vit-balce-3class`, `resnet18-18class-rgb` and `resnet18-3class-rgb`. `-m` selects the model (0 = ResNet50, 1 = ResNet18, 2 = ViT, 3 = BEiT). For ResNet weights, add `-g` if the model was trained on greyscale images. See [`test/README.md`](test/README.md) for more examples.
 
 > **Note on preprocessing (November 2026).** ViT/BEiT predictions now use the same resize, crop and ImageNet normalisation as training (`--preprocess train`, the default). Earlier results used the Hugging Face image processor (`--preprocess processor`), which does not match training. On the Pi-10 test set (11,015 images), the released `vit-mislas` weights score 0.9299 accuracy / 0.9281 weighted F1 with `processor`, matching the published 30-epoch result, and 0.9333 / 0.9324 with `train`.
 
@@ -93,6 +93,10 @@ python tools/evaluate.py --predictions-dir results --labels-csv labels.csv --out
 ```
 
 `labels.csv` needs `Filename` and `Label` columns.
+
+## Licence
+
+The code is released under the [BSD 3-Clause licence](LICENSE).
 
 ## Acknowledgements
 
